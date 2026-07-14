@@ -12,6 +12,8 @@ import (
 	"github.com/celestix/gotgproto/ext"
 	"github.com/celestix/gotgproto/storage"
 	"github.com/celestix/gotgproto/types"
+
+	// "github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 )
@@ -40,12 +42,19 @@ func supportedMediaFilter(m *types.Message) (bool, error) {
 	}
 }
 
+// função para enviar o link do video no chat do telegram
 func sendLink(ctx *ext.Context, u *ext.Update) error {
+
+	// Captura e identifica o ID do chat e do usuário
 	chatId := u.EffectiveChat().GetID()
 	peerChatId := ctx.PeerStorage.GetPeerById(chatId)
+
+	// Garante que o bot só responda em conversas privadas (Direct Messages)
+	// e nao responda no canal de log
 	if peerChatId.Type != int(storage.TypeUser) {
 		return dispatcher.EndGroups
 	}
+
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
 		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
 		return dispatcher.EndGroups
@@ -55,10 +64,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return err
 	}
 	if !supported {
-		ctx.Reply(u, ext.ReplyTextString("Sorry, this message type is unsupported."), nil)
+		ctx.Reply(u, ext.ReplyTextString("Desculpe, este tipo de mensagem não é suportado."), nil)
 		return dispatcher.EndGroups
 	}
-	update, err := utils.ForwardMessages(ctx, chatId, config.ValueOf.LogChannelID, u.EffectiveMessage.ID)
+
+	// update, err := utils.ForwardMessages(ctx, chatId, config.ValueOf.LogChannelID, u.EffectiveMessage.ID)
+	update, err := utils.SendMediaCopy(ctx, chatId, u.EffectiveMessage.Media)
+
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
@@ -98,6 +110,25 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	)
 	hash := utils.GetShortHash(fullHash)
 	link := fmt.Sprintf("%s/stream/%d?hash=%s", config.ValueOf.Host, messageID, hash)
+
+	// mensagem formatada da resposta do bot, com o link para download e stream do arquivo
+	messageFormatted := []styling.StyledTextOption{
+		styling.Bold("🎬 Mídia Pronta para Acesso"),
+		styling.Plain("\n➖➖➖➖➖➖➖➖➖➖➖\n"),
+		styling.Bold("📁 Arquivo: "),
+		styling.Plain(file.FileName),
+		styling.Plain("\n\n"),
+		styling.Bold("Nome do strm: "),
+		styling.Code("nome do arquivo strm gerado"),
+		styling.Plain("\n\n➖➖➖➖➖➖➖➖➖➖➖\n"),
+		styling.Bold("🔗 Links Rápidos (Toque para copiar):\n\n"),
+		styling.Bold("📺 Stream: "),
+		styling.Code(link),
+		styling.Plain("\n\n"),
+		styling.Bold("⬇️ Download: "),
+		styling.Code(link + "&d=true"),
+	}
+
 	text := styling.Code(link)
 	row := tg.KeyboardButtonRow{
 		Buttons: []tg.KeyboardButtonClass{
@@ -122,7 +153,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 			ReplyToMessageId: u.EffectiveMessage.ID,
 		})
 	} else {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(text), &ext.ReplyOpts{
+		_, err = ctx.Reply(u, ext.ReplyTextStyledTextArray(messageFormatted), &ext.ReplyOpts{
 			Markup:           markup,
 			NoWebpage:        false,
 			ReplyToMessageId: u.EffectiveMessage.ID,
