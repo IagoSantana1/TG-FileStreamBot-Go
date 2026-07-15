@@ -10,11 +10,12 @@ import (
 )
 
 type File struct {
-	Location tg.InputFileLocationClass
-	FileSize int64
-	FileName string
-	MimeType string
-	ID       int64
+	Location    tg.InputFileLocationClass
+	FileSize    int64
+	FileName    string
+	DisplayName string
+	MimeType    string
+	ID          int64
 }
 
 type HashableFileStruct struct {

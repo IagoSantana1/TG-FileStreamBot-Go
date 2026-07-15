@@ -131,7 +131,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	hash := utils.GetShortHash(fullHash)
 	strmFileName := utils.ProcessStrmFileName(displayName)
 	strmFileNameWithExt := strmFileName + ".strm"
-	// linkStrm := buildStrmLink(messageID, hash, strmFileNameWithExt)
+	linkStrm := buildStrmLink(messageID, hash, strmFileNameWithExt)
 	link := fmt.Sprintf("%s/stream/%d?hash=%s", config.ValueOf.Host, messageID, hash)
 
 	// mensagem formatada da resposta do bot, com o link para download e stream do arquivo
@@ -142,7 +142,8 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		styling.Code(file.FileName),
 		styling.Plain("\n\n"),
 		styling.Bold("Nome do strm: "),
-		styling.Code(strmFileNameWithExt),
+		styling.Code(displayName),
+		styling.Plain("\n\n"),
 		styling.Plain("\n\n➖➖➖➖➖➖➖➖➖➖➖\n"),
 		styling.Bold("🔗 Links Rápidos (Toque para copiar):\n\n"),
 		styling.Bold("📺 Stream: "),
@@ -159,8 +160,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 				Text: "Download",
 				URL:  link + "&d=true",
 			},
+			&tg.KeyboardButtonURL{
+				Text: "strm",
+				URL:  linkStrm,
+			},
 		},
 	}
+
 	if strings.Contains(file.MimeType, "video") || strings.Contains(file.MimeType, "audio") || strings.Contains(file.MimeType, "pdf") {
 		row.Buttons = append(row.Buttons, &tg.KeyboardButtonURL{
 			Text: "Stream",

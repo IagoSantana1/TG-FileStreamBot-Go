@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/gotd/td/tg"
 	range_parser "github.com/quantumsheep/range-parser"
@@ -23,6 +26,7 @@ func (e *allRoutes) LoadHome(r *Route) {
 	log = e.log.Named("Stream")
 	defer log.Info("Loaded stream route")
 	r.Engine.GET("/stream/:messageID", getStreamRoute)
+	r.Engine.GET("/strm/:messageID", getStrmRoute)
 }
 
 func getStreamRoute(ctx *gin.Context) {
@@ -139,4 +143,82 @@ func getStreamRoute(ctx *gin.Context) {
 			}
 		}
 	}
+}
+
+func getStrmRoute(ctx *gin.Context) {
+	writer := ctx.Writer
+	request := ctx.Request
+
+	messageIDParams := ctx.Param("messageID")
+	messageID, err := strconv.Atoi(messageIDParams)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	authHash := ctx.Query("hash")
+	if authHash == "" {
+		http.Error(writer, "missing hash param", http.StatusBadRequest)
+		return
+	}
+
+	worker := bot.GetNextWorker()
+
+	file, err := utils.FileFromMessage(ctx, worker.Client, messageID)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = os.Getenv("APP_URL")
+	}
+	if host == "" {
+		host = fmt.Sprintf("http://localhost:%s", os.Getenv("PORT"))
+	}
+
+	// 2. Garante que o host tenha o protocolo (http:// ou https://)
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		proto := "http"
+		// Se o Codespace ou Proxy encaminhar como HTTPS, respeita isso
+		if request.TLS != nil || request.Header.Get("X-Forwarded-Proto") == "https" {
+			proto = "https"
+		}
+		host = fmt.Sprintf("%s://%s", proto, host)
+	}
+
+	// Remove barra final se o usuário tiver configurado por engano (evita dupla barra no link)
+	host = strings.TrimSuffix(host, "/")
+
+	// Gera o link de download
+	downloadLink := fmt.Sprintf("%s/stream/%d?hash=%s", host, messageID, authHash)
+
+	// Processa o nome do arquivo .strm usando o DisplayName melhorado
+	nameParam := ctx.Query("name")
+	var strmFileName string
+	if nameParam != "" {
+		decoded, err := url.QueryUnescape(nameParam)
+		if err == nil && strings.TrimSpace(decoded) != "" {
+			strmFileName = decoded
+		}
+	}
+
+	if strmFileName == "" {
+		// Usar DisplayName se disponível, senão usar FileName original
+		nameToProcess := file.DisplayName
+		if nameToProcess == "" {
+			nameToProcess = file.FileName
+		}
+		processedFileName := utils.ProcessStrmFileName(nameToProcess)
+		strmFileName = processedFileName + ".strm"
+	}
+
+	// Define headers para download do arquivo .strm
+	ctx.Header("Content-Type", "application/octet-stream")
+	ctx.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", strmFileName))
+	ctx.Header("Content-Length", strconv.Itoa(len(downloadLink)))
+
+	// Envia o conteúdo do arquivo .strm (apenas o link de download)
+	ctx.String(http.StatusOK, downloadLink)
 }
