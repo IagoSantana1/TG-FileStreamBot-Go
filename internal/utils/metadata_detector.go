@@ -63,3 +63,17 @@ func isGenericOrEmpty(name string) bool {
 	trimmed := strings.TrimSpace(name)
 	return trimmed == ""
 }
+
+func removeAtMentions(text string) string {
+	// Remove @usuario e tudo depois até espaço ou fim
+	reAtMentionsClean := regexp.MustCompile(`@[\w_]+`)
+	return reAtMentionsClean.ReplaceAllString(text, "")
+}
+
+func FormatFileNameForDisplay(metadata string) string {
+	title := removeAtMentions(metadata)
+	title = strings.TrimSpace(title)
+
+	// Padrão: retornar o título sem @mentions
+	return title
+}

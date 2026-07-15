@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"EverythingSuckz/fsb/config"
@@ -40,6 +41,22 @@ func supportedMediaFilter(m *types.Message) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// função para criar o link do arquivo strm para download
+func buildStrmLink(messageID int, hash string, strmFileName string) string {
+	name := strings.TrimSpace(strmFileName)
+	if name == "" {
+		return ""
+	}
+
+	if !strings.HasSuffix(strings.ToLower(name), ".strm") {
+		name += ".strm"
+	}
+
+	encodedName := url.QueryEscape(name)
+
+	return fmt.Sprintf("%s/strm/%d?hash=%s&name=%s", config.ValueOf.Host, messageID, hash, encodedName)
 }
 
 // função para enviar o link do video no chat do telegram
@@ -108,7 +125,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		file.MimeType,
 		file.ID,
 	)
+
+	displayName := utils.FormatFileNameForDisplay(file.FileName)
+
 	hash := utils.GetShortHash(fullHash)
+	strmFileName := utils.ProcessStrmFileName(displayName)
+	strmFileNameWithExt := strmFileName + ".strm"
+	// linkStrm := buildStrmLink(messageID, hash, strmFileNameWithExt)
 	link := fmt.Sprintf("%s/stream/%d?hash=%s", config.ValueOf.Host, messageID, hash)
 
 	// mensagem formatada da resposta do bot, com o link para download e stream do arquivo
@@ -116,10 +139,10 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		styling.Bold("🎬 Mídia Pronta para Acesso"),
 		styling.Plain("\n➖➖➖➖➖➖➖➖➖➖➖\n"),
 		styling.Bold("📁 Arquivo: "),
-		styling.Plain(file.FileName),
+		styling.Code(file.FileName),
 		styling.Plain("\n\n"),
 		styling.Bold("Nome do strm: "),
-		styling.Code("nome do arquivo strm gerado"),
+		styling.Code(strmFileNameWithExt),
 		styling.Plain("\n\n➖➖➖➖➖➖➖➖➖➖➖\n"),
 		styling.Bold("🔗 Links Rápidos (Toque para copiar):\n\n"),
 		styling.Bold("📺 Stream: "),
