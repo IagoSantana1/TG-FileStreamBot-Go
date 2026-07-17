@@ -85,8 +85,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// update, err := utils.ForwardMessages(ctx, chatId, config.ValueOf.LogChannelID, u.EffectiveMessage.ID)
-	update, err := utils.SendMediaCopy(ctx, chatId, u.EffectiveMessage.Media)
+	update, err := utils.SendMediaCopy(ctx, chatId, u.EffectiveMessage.Media, u.EffectiveMessage.Message.Message)
 
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
@@ -114,7 +113,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 	doc := msg.Media
-	file, err := utils.FileFromMedia(doc)
+	file, err := utils.FileFromMedia(doc, msg.Message)
 	if err != nil {
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
 		return dispatcher.EndGroups
@@ -126,7 +125,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		file.ID,
 	)
 
-	displayName := utils.FormatFileNameForDisplay(file.FileName)
+	metadata := utils.DetectFileMetadata(file.FileName, msg.Message)
+
+	// Formata o nome e aplica o Fallback de segurança se ficar vazio
+	displayName := utils.FormatFileNameForDisplay(metadata)
+	if displayName == "" {
+		displayName = file.FileName
+	}
 
 	hash := utils.GetShortHash(fullHash)
 	strmFileName := utils.ProcessStrmFileName(displayName)
@@ -142,8 +147,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		styling.Code(file.FileName),
 		styling.Plain("\n\n"),
 		styling.Bold("Nome do strm: "),
-		styling.Code(displayName),
-		styling.Plain("\n\n"),
+		styling.Code(strmFileNameWithExt),
 		styling.Plain("\n\n➖➖➖➖➖➖➖➖➖➖➖\n"),
 		styling.Bold("🔗 Links Rápidos (Toque para copiar):\n\n"),
 		styling.Bold("📺 Stream: "),
