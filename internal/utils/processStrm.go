@@ -6,27 +6,6 @@ import (
 	"unicode"
 )
 
-// Regex pré-compiladas para melhor performance
-var (
-	reSiga                 = regexp.MustCompile(`(?i)\bsiga\b.*`)
-	reAtMention            = regexp.MustCompile(`@\S+`)
-	reExtension            = regexp.MustCompile(`(?i)\.(mp4|mkv|avi)$`)
-	reYearWrapped          = regexp.MustCompile(`\(\d{4}\)|\[\d{4}\]`)
-	reYearPlain            = regexp.MustCompile(`\b\d{4}\b`)
-	reResolution           = regexp.MustCompile(`(?i)\b\d{3,4}p\b`)
-	reParensBrackets       = regexp.MustCompile(`[\(\)\[\]]`)
-	reQualityCodecs        = regexp.MustCompile(`(?i)\b(web[-\s]?dl|webdl|web[-\s]?rip|webrip|blu[-\s]?ray|bluray|hd[-\s]?rip|hdrip|dvd[-\s]?rip|dvdrip|hdtv|brip|brrip|4k|uhd|x264|x265|h\.?264|h\.?265|hevc|avc|ddp?\d*\.?\d*|aac\d*\.?\d*|ac3|dts[-\s]?hd|dts|atmos|truehd)\b`)
-	reReleaseGroup         = regexp.MustCompile(`-[A-Za-z]+`)
-	reDash                 = regexp.MustCompile(`\s*-\s*`)
-	reMultipleDots         = regexp.MustCompile(`\.{2,}`)
-	reSeasonEpisodeCase    = regexp.MustCompile(`(?i)\bs(\d+)e(\d+)\b`)
-	reQualityPattern       = regexp.MustCompile(`(?i)\b(BRRip|BRRIP|brip|BRip|WEB-DL|WEB-RIP|BluRay|Blu-Ray|HDRip|HD-RIP|DVDRip|DVD-RIP|HDTV|WebRip|WEBRip)\b`)
-	reCodecPattern         = regexp.MustCompile(`(?i)\b(x265|x264|H\.?265|H\.?264|HEVC|AVC|HEVC)\b`)
-	reAudioPattern         = regexp.MustCompile(`(?i)\b(AAC|AC3|DDP5\.1|DDP\s5\.1|DTS|DTS-HD|ATMOS|TrueHD)\b`)
-	reKnownSuffix          = regexp.MustCompile(`(?i)^(hdrip|hdtv|brrip|bdrip|webrip|web[-_]?dl|bluray|brip|uhd|4k|fhd|hd|sd|x264|x265|h264|h265|hevc|avc|aac\d*|ac3|ddp\d*(?:\.\d+)?|dts[-_]?hd|dts|atmos|truehd|\d{3,4}p|s\d{1,2}e\d{1,3}|\d{1,2}[xX]\d{1,2})$`)
-	reSeasonEpisodePattern = regexp.MustCompile(`(?i)s\d{1,2}e\d{1,3}`)
-)
-
 func ProcessStrmFileName(fileName string) string {
 	return ProcessStrmFileNameWithQuality(fileName, 0)
 }
@@ -36,79 +15,51 @@ func ProcessStrmFileNameWithQuality(fileName string, fileSize int64) string {
 		return fileName
 	}
 
-	// Remove espaços no início e fim
-	fileName = strings.TrimSpace(fileName)
-
-	// Se tiver quebras de linha, usa apenas a primeira linha (antes de quebras)
+	// 1. Troca sublinhados por espaços e limpa quebras/extensões
+	fileName = strings.ReplaceAll(fileName, "_", " ")
 	lines := strings.Split(fileName, "\n")
 	fileName = strings.TrimSpace(lines[0])
-
-	// Remove "Siga:" e tudo que vem após (case insensitive)
 	fileName = reSiga.ReplaceAllString(fileName, "")
-
-	// Remove menções com @ (ex: @ultrafilmesbr)
 	fileName = reAtMention.ReplaceAllString(fileName, "")
-
-	// Remove espaços extras novamente após remoções
-	fileName = strings.TrimSpace(fileName)
-
-	// Remove ponto inicial se existir
-	fileName = strings.TrimPrefix(fileName, ".")
-
-	// Remove extensões de mídia (.mp4, .mkv, .avi, .mov, .flv, .wmv, .webm, etc - case insensitive)
 	fileName = reExtension.ReplaceAllString(fileName, "")
 
-	// *** IMPORTANTE: Extrai qualidade ANTES de remover duplicatas ***
-	// Isso garante que capturemos a qualidade de ANTES de " - - "
-	qualityInfo := extractQualityInfo(fileName)
-
-	/// Remove datas entre parênteses: (2011), (2023), etc.
-	fileName = reYearWrapped.ReplaceAllString(fileName, "")
-
-	// Remove anos soltos (4 dígitos)
-	fileName = reYearPlain.ReplaceAllString(fileName, "")
-
-	// Remove resoluções de vídeo: 720p, 1080p, 2160p, etc.
-	fileName = reResolution.ReplaceAllString(fileName, "")
-
-	// Remove caracteres entre parênteses e colchetes
-	fileName = reParensBrackets.ReplaceAllString(fileName, "")
-
-	// Remove qualidade, codecs e áudio do meio (serão adicionados no final)
-	fileName = reQualityCodecs.ReplaceAllString(fileName, "")
-
-	// Remove grupos de release (ex: -KANE, -GROUP)
-	fileName = reReleaseGroup.ReplaceAllString(fileName, "")
-
-	// Remove traços isolados
-	fileName = reDash.ReplaceAllString(fileName, ".")
-
-	// Remove espaços extras
-	fileName = strings.TrimSpace(fileName)
-
-	// Substitui espaços por pontos
-	fileName = strings.ReplaceAll(fileName, " ", ".")
-
-	// Remove pontos múltiplos consecutivos
-	fileName = reMultipleDots.ReplaceAllString(fileName, ".")
-
-	// Remove pontos no início e fim
-	fileName = strings.Trim(fileName, ".")
-
-	// Remove episódios/temporadas duplicados no final do nome
-	// Também preserva a qualidade extraída anteriormente
-	fileName = removeDuplicateEpisodes(fileName)
-
-	// Garante que S e E de temporada/episódio estejam em MAIÚSCULO (s01e01 -> S01E01)
-	// Normaliza diferentes formatos de episódio para S00E00 (ex: 1x01, T01E01 -> S01E01)
+	// 2. Normaliza qualquer padrão de temporada/episódio para SXXEXX
 	fileName = NormalizeEpisodeFormat(fileName)
 
-	// Garante que S e E de temporada/episódio estejam em MAIÚSCULO (s01e01 -> S01E01)
-	fileName = reSeasonEpisodeCase.ReplaceAllStringFunc(fileName, func(match string) string {
-		return strings.ToUpper(match)
-	})
+	// 3. SE FOR SÉRATION (contém SXXEXX): limpa o título e junta puramente com o SXXEXX
+	if matches := reSeasonEpisodePattern.FindStringIndex(fileName); len(matches) == 2 {
+		rawTitle := fileName[:matches[0]]
+		seasonEpisode := strings.ToUpper(fileName[matches[0]:matches[1]])
 
-	// Adiciona informações de qualidade no final (se existirem)
+		// Limpa lixo do título (DSNP, C76, 1, H.264, Final, etc.)
+		cleanTitle := reJunkTags.ReplaceAllString(rawTitle, "")
+		cleanTitle = reYearWrapped.ReplaceAllString(cleanTitle, "")
+		cleanTitle = reYearPlain.ReplaceAllString(cleanTitle, "")
+		cleanTitle = reParensBrackets.ReplaceAllString(cleanTitle, "")
+
+		// Remove números isolados residuais do título (como o "1" solto em DSNP.1)
+		cleanTitle = regexp.MustCompile(`\b\d+\b`).ReplaceAllString(cleanTitle, "")
+
+		// Substitui múltiplos espaços/pontos/traços por um único ponto
+		cleanTitle = regexp.MustCompile(`[_\.\-\s]+`).ReplaceAllString(cleanTitle, ".")
+		cleanTitle = strings.Trim(cleanTitle, ".")
+
+		return cleanTitle + "." + seasonEpisode
+	}
+
+	// 4. SE FOR FILME: Mantém o fluxo normal
+	qualityInfo := extractQualityInfo(fileName)
+	fileName = reYearWrapped.ReplaceAllString(fileName, "")
+	fileName = reYearPlain.ReplaceAllString(fileName, "")
+	fileName = reResolution.ReplaceAllString(fileName, "")
+	fileName = reParensBrackets.ReplaceAllString(fileName, "")
+	fileName = reQualityCodecs.ReplaceAllString(fileName, "")
+	fileName = reReleaseGroup.ReplaceAllString(fileName, "")
+	fileName = reJunkTags.ReplaceAllString(fileName, "")
+
+	fileName = regexp.MustCompile(`[_\.\-\s]+`).ReplaceAllString(fileName, ".")
+	fileName = strings.Trim(fileName, ".")
+
 	if qualityInfo != "" {
 		fileName = fileName + "." + qualityInfo
 	}
@@ -242,4 +193,158 @@ func cleanNameForDownload(text string) string {
 	}
 
 	return text
+}
+
+func IsGenericFileName(fileName string) bool {
+	if fileName == "" {
+		return true
+	}
+
+	// Remove extensão
+	nameWithoutExt := fileName
+	re := regexp.MustCompile(`\.[a-zA-Z0-9]+$`)
+	nameWithoutExt = re.ReplaceAllString(fileName, "")
+
+	// Normaliza para lowercase para comparação
+	lowerName := strings.ToLower(strings.TrimSpace(nameWithoutExt))
+
+	// Lista de nomes genéricos
+	genericNames := map[string]bool{
+		"file":         true,
+		"arquivo":      true,
+		"document":     true,
+		"documento":    true,
+		"video":        true,
+		"vídeo":        true,
+		"audio":        true,
+		"áudio":        true,
+		"image":        true,
+		"imagem":       true,
+		"photo":        true,
+		"foto":         true,
+		"media":        true,
+		"mídia":        true,
+		"download":     true,
+		"unnamed":      true,
+		"untitled":     true,
+		"noname":       true,
+		"unknown":      true,
+		"desconhecido": true,
+		"sem nome":     true,
+	}
+
+	if genericNames[lowerName] {
+		return true
+	}
+
+	// Verifica se é nome de site de download (padrões comuns)
+	// Remove informações de episódio para pegar só o título base
+	baseName := lowerName
+	baseName = regexp.MustCompile(`(?i)\s*-?\s*s\d+e\d+.*$`).ReplaceAllString(baseName, "")
+	baseName = regexp.MustCompile(`(?i)\s*-?\s*\d+x\d+.*$`).ReplaceAllString(baseName, "")
+	baseName = strings.TrimSpace(baseName)
+
+	// Padrões de nomes de sites
+	sitePatterns := []string{
+		"baixar.*mp4",
+		"download.*mp4",
+		"filmesmp4",
+		"seriesmp4",
+		"comandotorrents",
+		"comandofilmes",
+		"torrentsbr",
+		"bludv",
+		"mega.*filmes",
+		"series.*online",
+	}
+
+	for _, pattern := range sitePatterns {
+		matched, _ := regexp.MatchString("(?i)"+pattern, baseName)
+		if matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ExtractQualityFromDescription extrai informações de qualidade da descrição da mensagem
+// Procura por padrões como: FHD, HD, SD, WEB-DL, Dublado, etc
+// Retorna padrão: [Qualidade].[Fonte].[Áudio]
+func ExtractQualityFromDescription(description string) string {
+	if description == "" {
+		return ""
+	}
+
+	var qualityParts []string
+
+	// Padrões de qualidade/resolução (ordem importa - FHD tem prioridade sobre HD)
+	qualityPatterns := []struct {
+		pattern string
+		label   string
+	}{
+		{`(?i)\bFHD\b`, "FHD"},
+		{`(?i)\b(1080p|1080|Full.?HD)\b`, "FHD"},
+		{`(?i)\b4K\b`, "4K"},
+		{`(?i)\b(720p|720|HD)\b`, "HD"},
+		{`(?i)\bSD\b`, "SD"},
+	}
+
+	// Padrões de fonte/tipo (ordem importa - prioridade)
+	sourcePatterns := []struct {
+		pattern string
+		label   string
+	}{
+		{`(?i)WEB-?DL`, "WEB-DL"},
+		{`(?i)BluRay`, "BluRay"},
+		{`(?i)WEB-?RIP`, "WEBRip"},
+		{`(?i)HDRip`, "HDRip"},
+	}
+
+	// Padrões de áudio/idioma (ordem importa - extrai todos, não só primeiro)
+	audioPatterns := []struct {
+		pattern string
+		label   string
+	}{
+		{`(?i)Dublado|DUB`, "Dub"},
+		{`(?i)Legendado|LEG`, "Leg"},
+		{`PT-BR|🇧🇷|(?i)Brasil`, "PT"},
+		{`(?i)Portugu[eê]s`, "PT"},
+	}
+
+	// Extrai qualidade/resolução (primeira match tem prioridade)
+	for _, q := range qualityPatterns {
+		re := regexp.MustCompile(q.pattern)
+		if re.MatchString(description) {
+			qualityParts = append(qualityParts, q.label)
+			break
+		}
+	}
+
+	// Extrai fonte (primeira match tem prioridade)
+	for _, s := range sourcePatterns {
+		re := regexp.MustCompile(s.pattern)
+		if re.MatchString(description) {
+			qualityParts = append(qualityParts, s.label)
+			break
+		}
+	}
+
+	// Extrai áudio/idioma (pode ter múltiplos, mas em ordem de prioridade)
+	// Verifica todos os padrões em ordem e adiciona o primeiro que achar
+	audioFound := make(map[string]bool)
+	for _, a := range audioPatterns {
+		re := regexp.MustCompile(a.pattern)
+		if re.MatchString(description) && !audioFound[a.label] {
+			qualityParts = append(qualityParts, a.label)
+			audioFound[a.label] = true
+		}
+	}
+
+	// Retorna partes juntas com ponto
+	if len(qualityParts) > 0 {
+		return strings.Join(qualityParts, ".")
+	}
+
+	return ""
 }

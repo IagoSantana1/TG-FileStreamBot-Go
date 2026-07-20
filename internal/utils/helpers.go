@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"regexp"
 	"strings"
 
 	"github.com/celestix/gotgproto"
@@ -201,28 +200,6 @@ func GetLogChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage
 	return channel.AsInput(), nil
 }
 
-func ForwardMessages(ctx *ext.Context, fromChatId, toChatId int64, messageID int) (*tg.Updates, error) {
-	fromPeer := ctx.PeerStorage.GetInputPeerById(fromChatId)
-	if fromPeer.Zero() {
-		return nil, fmt.Errorf("fromChatId: %d is not a valid peer", fromChatId)
-	}
-	toPeer, err := GetLogChannelPeer(ctx, ctx.Raw, ctx.PeerStorage)
-	if err != nil {
-		return nil, err
-	}
-	update, err := ctx.Raw.MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
-		RandomID: []int64{rand.Int63()},
-		FromPeer: fromPeer,
-		ID:       []int{messageID},
-		ToPeer:   &tg.InputPeerChannel{ChannelID: toPeer.ChannelID, AccessHash: toPeer.AccessHash},
-	})
-
-	if err != nil {
-		return nil, err
-	}
-	return update.(*tg.Updates), nil
-}
-
 // SendMediaCopy envia uma cópia da mídia para o canal de logs sem criar vínculo de encaminhamento.
 // O Telegram gera uma nova mensagem independente, de propriedade exclusiva do bot.
 func SendMediaCopy(ctx *ext.Context, toChatID int64, media tg.MessageMediaClass, caption string) (*tg.Updates, error) {
@@ -281,160 +258,6 @@ func SendMediaCopy(ctx *ext.Context, toChatID int64, media tg.MessageMediaClass,
 	}
 
 	return updates, nil
-}
-
-// ExtractQualityFromDescription extrai informações de qualidade da descrição da mensagem
-// Procura por padrões como: FHD, HD, SD, WEB-DL, Dublado, etc
-// Retorna padrão: [Qualidade].[Fonte].[Áudio]
-func ExtractQualityFromDescription(description string) string {
-	if description == "" {
-		return ""
-	}
-
-	var qualityParts []string
-
-	// Padrões de qualidade/resolução (ordem importa - FHD tem prioridade sobre HD)
-	qualityPatterns := []struct {
-		pattern string
-		label   string
-	}{
-		{`(?i)\bFHD\b`, "FHD"},
-		{`(?i)\b(1080p|1080|Full.?HD)\b`, "FHD"},
-		{`(?i)\b4K\b`, "4K"},
-		{`(?i)\b(720p|720|HD)\b`, "HD"},
-		{`(?i)\bSD\b`, "SD"},
-	}
-
-	// Padrões de fonte/tipo (ordem importa - prioridade)
-	sourcePatterns := []struct {
-		pattern string
-		label   string
-	}{
-		{`(?i)WEB-?DL`, "WEB-DL"},
-		{`(?i)BluRay`, "BluRay"},
-		{`(?i)WEB-?RIP`, "WEBRip"},
-		{`(?i)HDRip`, "HDRip"},
-	}
-
-	// Padrões de áudio/idioma (ordem importa - extrai todos, não só primeiro)
-	audioPatterns := []struct {
-		pattern string
-		label   string
-	}{
-		{`(?i)Dublado|DUB`, "Dub"},
-		{`(?i)Legendado|LEG`, "Leg"},
-		{`PT-BR|🇧🇷|(?i)Brasil`, "PT"},
-		{`(?i)Portugu[eê]s`, "PT"},
-	}
-
-	// Extrai qualidade/resolução (primeira match tem prioridade)
-	for _, q := range qualityPatterns {
-		re := regexp.MustCompile(q.pattern)
-		if re.MatchString(description) {
-			qualityParts = append(qualityParts, q.label)
-			break
-		}
-	}
-
-	// Extrai fonte (primeira match tem prioridade)
-	for _, s := range sourcePatterns {
-		re := regexp.MustCompile(s.pattern)
-		if re.MatchString(description) {
-			qualityParts = append(qualityParts, s.label)
-			break
-		}
-	}
-
-	// Extrai áudio/idioma (pode ter múltiplos, mas em ordem de prioridade)
-	// Verifica todos os padrões em ordem e adiciona o primeiro que achar
-	audioFound := make(map[string]bool)
-	for _, a := range audioPatterns {
-		re := regexp.MustCompile(a.pattern)
-		if re.MatchString(description) && !audioFound[a.label] {
-			qualityParts = append(qualityParts, a.label)
-			audioFound[a.label] = true
-		}
-	}
-
-	// Retorna partes juntas com ponto
-	if len(qualityParts) > 0 {
-		return strings.Join(qualityParts, ".")
-	}
-
-	return ""
-}
-
-func IsGenericFileName(fileName string) bool {
-	if fileName == "" {
-		return true
-	}
-
-	// Remove extensão
-	nameWithoutExt := fileName
-	re := regexp.MustCompile(`\.[a-zA-Z0-9]+$`)
-	nameWithoutExt = re.ReplaceAllString(fileName, "")
-
-	// Normaliza para lowercase para comparação
-	lowerName := strings.ToLower(strings.TrimSpace(nameWithoutExt))
-
-	// Lista de nomes genéricos
-	genericNames := map[string]bool{
-		"file":         true,
-		"arquivo":      true,
-		"document":     true,
-		"documento":    true,
-		"video":        true,
-		"vídeo":        true,
-		"audio":        true,
-		"áudio":        true,
-		"image":        true,
-		"imagem":       true,
-		"photo":        true,
-		"foto":         true,
-		"media":        true,
-		"mídia":        true,
-		"download":     true,
-		"unnamed":      true,
-		"untitled":     true,
-		"noname":       true,
-		"unknown":      true,
-		"desconhecido": true,
-		"sem nome":     true,
-	}
-
-	if genericNames[lowerName] {
-		return true
-	}
-
-	// Verifica se é nome de site de download (padrões comuns)
-	// Remove informações de episódio para pegar só o título base
-	baseName := lowerName
-	baseName = regexp.MustCompile(`(?i)\s*-?\s*s\d+e\d+.*$`).ReplaceAllString(baseName, "")
-	baseName = regexp.MustCompile(`(?i)\s*-?\s*\d+x\d+.*$`).ReplaceAllString(baseName, "")
-	baseName = strings.TrimSpace(baseName)
-
-	// Padrões de nomes de sites
-	sitePatterns := []string{
-		"baixar.*mp4",
-		"download.*mp4",
-		"filmesmp4",
-		"seriesmp4",
-		"comandotorrents",
-		"comandofilmes",
-		"torrentsbr",
-		"bludv",
-		"mega.*filmes",
-		"series.*online",
-	}
-
-	for _, pattern := range sitePatterns {
-		matched, _ := regexp.MatchString("(?i)"+pattern, baseName)
-		if matched {
-			return true
-		}
-	}
-
-	return false
 }
 
 // isAllLettersOrNumbers verifica se uma string contém apenas letras e números

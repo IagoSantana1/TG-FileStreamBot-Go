@@ -33,23 +33,16 @@ func DetectFileMetadata(fileName, messageDescription string) *FileMetadata {
 		MissingInfo:      []string{},
 	}
 
-	// Passo 1: Combinar informações do nome + descrição
 	metadata.ExpandedName = combineNameAndDescription(fileName, messageDescription)
-
-	// Passo 2: Extrair informações básicas (título, qualidade)
 	metadata.Title = extractTitle(fileName, messageDescription)
 	metadata.Quality = ExtractQualityFromDescription(messageDescription)
-
-	// Passo 3: Detectar tipo (filme/série)
 	metadata.Type, metadata.TypeConfidence = detectFileType(metadata.ExpandedName)
 
-	// Passo 4: Extrair temporada e episódio
 	if metadata.Type == "series" {
 		season, episode, hasSeasonEpisode := extractSeasonEpisode(metadata.ExpandedName)
 		metadata.Season = season
 		metadata.Episode = episode
 
-		// Determina o que está faltando
 		if !hasSeasonEpisode {
 			if metadata.Episode == 0 {
 				metadata.MissingInfo = append(metadata.MissingInfo, "episode")
@@ -60,31 +53,27 @@ func DetectFileMetadata(fileName, messageDescription string) *FileMetadata {
 		}
 	}
 
-	// Passo 5: Verificar se tem tudo
 	metadata.AllInfoFound = len(metadata.MissingInfo) == 0
-
 	return metadata
 }
 
 func combineNameAndDescription(fileName, description string) string {
-	cleanName := strings.TrimSpace(fileName)
+	cleanName := strings.ReplaceAll(fileName, "_", " ")
+	cleanName = strings.TrimSpace(cleanName)
 	cleanName = removeExtensions(cleanName)
 	cleanName = removeAtMentions(cleanName)
-	cleanName = strings.TrimSpace(cleanName)
 
-	cleanDesc := strings.TrimSpace(description)
+	cleanDesc := strings.ReplaceAll(description, "_", " ")
+	cleanDesc = strings.TrimSpace(cleanDesc)
 	if cleanDesc == "" {
 		return cleanName
 	}
 
 	cleanDesc = reSiga.ReplaceAllString(cleanDesc, "")
 	cleanDesc = reAtMention.ReplaceAllString(cleanDesc, "")
-	cleanDesc = removeAtMentions(cleanDesc)
 	cleanDesc = strings.TrimSpace(cleanDesc)
 
-	// Se a própria legenda contiver dados de ep, ela vira prioridade
-	reCheck := regexp.MustCompile(`(?i)([ST]\d+|[0-9]+x[0-9]+)`)
-	if reCheck.MatchString(cleanDesc) {
+	if reSeasonPatternUnified.MatchString(cleanDesc) || rePtSeasonPattern.MatchString(cleanDesc) || reUnifiedEpisodeOnly.MatchString(cleanDesc) {
 		if cleanName != "" && !isGenericOrEmpty(cleanName) {
 			return cleanDesc + " " + cleanName
 		}
@@ -111,20 +100,15 @@ func isGenericOrEmpty(name string) bool {
 }
 
 func detectFileType(expandedName string) (string, int) {
-	// Padrões de ep locais e robustos para classificação de tipo
-	reSE := regexp.MustCompile(`(?i)[ST](\d+)[EX\s._\-]*(\d+)`)
-	reX := regexp.MustCompile(`(?i)\b(\d+)[xX](\d+)\b`)
-
-	if reSE.MatchString(expandedName) || reX.MatchString(expandedName) {
+	if reSeasonPatternUnified.MatchString(expandedName) || rePtSeasonPattern.MatchString(expandedName) {
 		return "series", 95
 	}
 
-	reEpIsolated := regexp.MustCompile(`(?i)\b(EP|E|EPISODIO)[._\-\s]*\d+\b`)
-	if reEpIsolated.MatchString(expandedName) {
+	if reUnifiedEpisodeOnly.MatchString(expandedName) {
 		return "series", 80
 	}
 
-	if regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(expandedName) {
+	if reYearPattern.MatchString(expandedName) {
 		return "movie", 85
 	}
 
@@ -139,33 +123,40 @@ func detectFileType(expandedName string) (string, int) {
 	return "unknown", 0
 }
 
-// extractSeasonEpisode extrai cirurgicamente APENAS os dígitos numéricos
+// 🚀 FIX: Agora extrai corretamente Temporada e Episódio de formatos em português
 func extractSeasonEpisode(expandedName string) (season int, episode int, hasInfo bool) {
-	// Grupos de captura (\d+) pegam apenas os números isolados!
-	reSE := regexp.MustCompile(`(?i)[ST](\d+)[EX\s._\-]*(\d+)`)
-	reX := regexp.MustCompile(`(?i)\b(\d+)[xX](\d+)\b`)
+	clean := strings.ReplaceAll(expandedName, "_", " ")
 
-	if matches := reSE.FindStringSubmatch(expandedName); len(matches) >= 3 {
-		season, _ = strconv.Atoi(matches[1])  // Captura apenas "04" -> vira 4
-		episode, _ = strconv.Atoi(matches[2]) // Captura apenas "02" -> vira 2
-		hasInfo = true
-		return
-	}
-
-	if matches := reX.FindStringSubmatch(expandedName); len(matches) >= 3 {
+	// 1. Tenta extrair de "Temporada 01 episódio 08"
+	if matches := rePtSeasonEpisodeCapture.FindStringSubmatch(clean); len(matches) >= 3 {
 		season, _ = strconv.Atoi(matches[1])
 		episode, _ = strconv.Atoi(matches[2])
 		hasInfo = true
 		return
 	}
 
-	if seasonNum, found := ExtractSeasonNumber(expandedName); found && seasonNum > 0 {
+	// 2. Tenta extrair de S01E08 ou 1x08
+	if matches := reUnifiedEpisode.FindStringSubmatch(clean); len(matches) == 5 {
+		if matches[1] != "" {
+			season, _ = strconv.Atoi(matches[1])
+			episode, _ = strconv.Atoi(matches[2])
+			hasInfo = true
+			return
+		}
+		if matches[3] != "" {
+			season, _ = strconv.Atoi(matches[3])
+			episode, _ = strconv.Atoi(matches[4])
+			hasInfo = true
+			return
+		}
+	}
+
+	if seasonNum, found := ExtractSeasonNumber(clean); found && seasonNum > 0 {
 		season = seasonNum
 	}
 
-	reEpIsolated := regexp.MustCompile(`(?i)\b(?:EP|E|EPISODIO)[._\-\s]*(\d+)\b`)
-	if matches := reEpIsolated.FindStringSubmatch(expandedName); len(matches) >= 2 {
-		episode, _ = strconv.Atoi(matches[1])
+	if matches := reUnifiedEpisodeOnly.FindStringSubmatch(clean); len(matches) == 3 {
+		episode, _ = strconv.Atoi(matches[2])
 		hasInfo = true
 	}
 
@@ -177,22 +168,40 @@ func extractSeasonEpisode(expandedName string) (season int, episode int, hasInfo
 }
 
 func extractTitle(fileName, description string) string {
-	cleanName := strings.TrimSpace(fileName)
+	cleanName := strings.ReplaceAll(fileName, "_", " ")
+	cleanName = strings.TrimSpace(cleanName)
 	cleanName = removeExtensions(cleanName)
 	cleanName = removeAtMentions(cleanName)
-	cleanName = strings.TrimSpace(cleanName)
 
 	if cleanName != "" && !IsGenericFileName(cleanName) {
-		// 1. Remove os padrões de episódio (ex: S02E06)
-		title := removeEpisodePatterns(cleanName)
+		title := cleanName
 
-		// 2. Remove resoluções e fontes residuais para o título não ficar poluído
-		reCleanExtra := regexp.MustCompile(`(?i)\b(2160p|1080p|720p|480p|4k|2k|WEB-?DL|BluRay|NF-?WEB-?DL|AMZN-?WEB-?DL|BRRip|WEBRip|HDRip|DVDRip)\b`)
-		title = reCleanExtra.ReplaceAllString(title, "")
+		// 🚀 CORREÇÃO CRÍTICA: Encontra a primeira ocorrência do padrão de episódio
+		// e CORRTA TUDO que vem do episódio para a frente!
+		firstMatchIdx := -1
+		for _, re := range []*regexp.Regexp{
+			rePtSeasonEpisodeCapture,
+			reUnifiedEpisode,
+			reUnifiedEpisodeOnly,
+			reSeasonNum,
+		} {
+			if loc := re.FindStringIndex(title); len(loc) == 2 {
+				if firstMatchIdx == -1 || loc[0] < firstMatchIdx {
+					firstMatchIdx = loc[0]
+				}
+			}
+		}
+
+		// Se encontrou o episódio/temporada, pega estritamente o texto ANTES dele
+		if firstMatchIdx > 0 {
+			title = title[:firstMatchIdx]
+		}
+
+		// Limpa eventuais tags residuais que estivessem ANTES do episódio (ex: resoluções)
+		title = reJunkTags.ReplaceAllString(title, " ")
 		title = removeAtMentions(title)
 
-		// 3. CRÍTICO: Substitui múltiplos sublinhados, pontos ou traços por espaços limpos
-		// (Para o DisplayName do Telegram, espaços tornam a leitura muito mais elegante)
+		// Normaliza múltiplos espaços e separadores
 		title = regexp.MustCompile(`[_\.\-\s]+`).ReplaceAllString(title, " ")
 		title = strings.TrimSpace(title)
 
@@ -201,23 +210,40 @@ func extractTitle(fileName, description string) string {
 		}
 	}
 
+	// Caso o nome do arquivo seja genérico, faz a mesma limpeza na legenda/descrição
 	if description != "" {
-		cleanDesc := strings.TrimSpace(description)
+		cleanDesc := strings.ReplaceAll(description, "_", " ")
+		cleanDesc = strings.TrimSpace(cleanDesc)
 		cleanDesc = reSiga.ReplaceAllString(cleanDesc, "")
 		cleanDesc = reAtMention.ReplaceAllString(cleanDesc, "")
-		cleanDesc = removeAtMentions(cleanDesc)
-		cleanDesc = strings.TrimSpace(cleanDesc)
 
 		if idx := strings.IndexAny(cleanDesc, "\n|.!?"); idx > 0 {
 			cleanDesc = cleanDesc[:idx]
 		}
 		cleanDesc = strings.TrimSpace(cleanDesc)
 
-		title := removeEpisodePatterns(cleanDesc)
+		firstMatchIdx := -1
+		for _, re := range []*regexp.Regexp{
+			rePtSeasonEpisodeCapture,
+			reUnifiedEpisode,
+			reUnifiedEpisodeOnly,
+			reSeasonNum,
+		} {
+			if loc := re.FindStringIndex(cleanDesc); len(loc) == 2 {
+				if firstMatchIdx == -1 || loc[0] < firstMatchIdx {
+					firstMatchIdx = loc[0]
+				}
+			}
+		}
+
+		if firstMatchIdx > 0 {
+			cleanDesc = cleanDesc[:firstMatchIdx]
+		}
+
+		title := reJunkTags.ReplaceAllString(cleanDesc, " ")
 		title = removeYearPatterns(title)
 		title = removeAtMentions(title)
 
-		// Normaliza os separadores da descrição também
 		title = regexp.MustCompile(`[_\.\-\s]+`).ReplaceAllString(title, " ")
 		title = strings.TrimSpace(title)
 		return title
@@ -227,24 +253,21 @@ func extractTitle(fileName, description string) string {
 }
 
 func removeAtMentions(text string) string {
-	reAtMentionsClean := regexp.MustCompile(`@[\w_]+`)
-	return reAtMentionsClean.ReplaceAllString(text, "")
+	return reAtMention.ReplaceAllString(text, "")
 }
 
+// 🚀 FIX: Substitui padrões de episódio por um ESPAÇO (" ") para nunca colar palavras
 func removeEpisodePatterns(text string) string {
-	reSE := regexp.MustCompile(`(?i)[ST]\d+[EX\s._\-]*\d+`)
-	reX := regexp.MustCompile(`(?i)\b\d+[xX]\d+\b`)
-	reEp := regexp.MustCompile(`(?i)\b(EP|E|EPISODIO)[._\-\s]*\d+\b`)
-
-	text = reSE.ReplaceAllString(text, "")
-	text = reX.ReplaceAllString(text, "")
-	text = reEp.ReplaceAllString(text, "")
-	text = regexp.MustCompile(`(?i)\bseason\s*\d+\b`).ReplaceAllString(text, "")
+	text = rePtSeasonEpisodeCapture.ReplaceAllString(text, " ")
+	text = reUnifiedEpisode.ReplaceAllString(text, " ")
+	text = reUnifiedEpisodeOnly.ReplaceAllString(text, " ")
+	text = reSeasonNum.ReplaceAllString(text, " ")
+	text = reShortSeason.ReplaceAllString(text, " ")
 	return strings.TrimSpace(text)
 }
 
 func removeYearPatterns(text string) string {
-	return strings.TrimSpace(regexp.MustCompile(`[\(\[\s_]+(?:19|20)\d{2}[\)\]\s_]*`).ReplaceAllString(text, ""))
+	return strings.TrimSpace(regexp.MustCompile(`[\(\[\s_]+(19|20)\d{2}[\)\]\s_]*`).ReplaceAllString(text, " "))
 }
 
 func matchesPattern(text, pattern string) bool {
@@ -252,25 +275,7 @@ func matchesPattern(text, pattern string) bool {
 	return re.MatchString(text)
 }
 
-func DetermineQuestionsNeeded(metadata *FileMetadata) []string {
-	questions := []string{}
-	if metadata.Type == "unknown" {
-		questions = append(questions, "type")
-	}
-	if IsGenericFileName(metadata.OriginalFileName) && metadata.Title == "" {
-		questions = append(questions, "title")
-	}
-	if metadata.Type == "series" && metadata.Season == 0 {
-		questions = append(questions, "season")
-	}
-	if metadata.Type == "series" && metadata.Episode > 0 && metadata.Season == 0 {
-		if !Contains(questions, "season") {
-			questions = append(questions, "season")
-		}
-	}
-	return questions
-}
-
+// FormatFileNameForDisplay formata o nome do arquivo para exibição limpa no Telegram
 func FormatFileNameForDisplay(metadata *FileMetadata) string {
 	title := removeAtMentions(metadata.Title)
 	title = strings.TrimSpace(title)

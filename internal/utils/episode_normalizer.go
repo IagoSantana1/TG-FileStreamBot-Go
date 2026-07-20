@@ -2,25 +2,8 @@ package utils
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
-)
-
-// Regex compiladas uma única vez para máxima performance
-var (
-	// 1. Unifica 0x0, T00E00 e S00E00 em uma única expressão para normalização rápida
-	reUnifiedEpisode = regexp.MustCompile(`(?i)\b(?:(\d{1,2})[xX](\d{1,2})|[ST](\d{1,2})E(\d{1,2}))\b`)
-
-	// 2. Unifica padrões de verificação de temporada (S01E01 ou 01x01)
-	reSeasonPatternUnified = regexp.MustCompile(`(?i)\b(?:S\d{1,2}E\d{1,3}|\d{1,2}[xX]\d{1,2})\b`)
-	rePtSeasonPattern      = regexp.MustCompile(`(?i)temporada[\s._-]*\d{1,2}.*epis[óo]dio[\s._-]*\d{1,3}`)
-
-	// 3. Unifica TODOS os formatos de episódio isolado (E05, EP05, Episódio 5, #Episódio 05, etc.) em uma única busca
-	reUnifiedEpisodeOnly = regexp.MustCompile(`(?i)(#\s*(?:episodio|episódio|ep)|\b(?:E[Pp]?|episodio|episódio|capitulo|capítulo|ep))\s*\.?\s*0*(\d{1,3})\b`)
-
-	reYearPattern = regexp.MustCompile(`\b(19|20)\d{2}\b`)
-	reSeasonNum   = regexp.MustCompile(`(?i)\b(?:season|temporada)[\s._-]*0*(\d{1,2})\b`)
-	reShortSeason = regexp.MustCompile(`(?i)\bT\s*0*(\d{1,2})\b`)
+	"strings"
 )
 
 // NormalizeEpisodeFormat normaliza diferentes formatos de episódio para S00E00
@@ -30,24 +13,36 @@ func NormalizeEpisodeFormat(fileName string) string {
 
 // normalizeEpisodeFormat realiza a conversão em uma única passada de alta performance
 func normalizeEpisodeFormat(fileName string) string {
-	return reUnifiedEpisode.ReplaceAllStringFunc(fileName, func(match string) string {
+	// Normaliza sublinhados para espaços para evitar que quebrem a busca de borda de palavra
+	clean := strings.ReplaceAll(fileName, "_", " ")
+
+	// 1. Converte "Temporada 01 episódio 08" -> "S01E08"
+	if matches := rePtSeasonEpisodeCapture.FindStringSubmatch(clean); len(matches) >= 3 {
+		season, _ := strconv.Atoi(matches[1])
+		episode, _ := strconv.Atoi(matches[2])
+		seStr := fmt.Sprintf("S%02dE%02d", season, episode)
+		clean = rePtSeasonEpisodeCapture.ReplaceAllString(clean, " "+seStr+" ")
+	}
+
+	// 2. Converte 1x08 ou T01E08 -> S01E08
+	clean = reUnifiedEpisode.ReplaceAllStringFunc(clean, func(match string) string {
 		parts := reUnifiedEpisode.FindStringSubmatch(match)
 		if len(parts) == 5 {
-			// Se casou com o formato '1x02' (primeira parte do OU da regex)
 			if parts[1] != "" {
-				season, _ := strconv.Atoi(parts[1])
-				episode, _ := strconv.Atoi(parts[2])
-				return fmt.Sprintf("S%02dE%02d", season, episode)
+				s, _ := strconv.Atoi(parts[1])
+				e, _ := strconv.Atoi(parts[2])
+				return fmt.Sprintf("S%02dE%02d", s, e)
 			}
-			// Se casou com o formato 'S01E02' ou 'T01E02' (segunda parte do OU da regex)
 			if parts[3] != "" {
-				season, _ := strconv.Atoi(parts[3])
-				episode, _ := strconv.Atoi(parts[4])
-				return fmt.Sprintf("S%02dE%02d", season, episode)
+				s, _ := strconv.Atoi(parts[3])
+				e, _ := strconv.Atoi(parts[4])
+				return fmt.Sprintf("S%02dE%02d", s, e)
 			}
 		}
 		return match
 	})
+
+	return clean
 }
 
 // HasSeasonPattern verifica se o nome já contém padrão de temporada+episódio
@@ -108,4 +103,21 @@ func InjectSeasonIntoEpisode(fileName string, season int) string {
 	})
 
 	return normalizeEpisodeFormat(updated)
+}
+
+// 🚀 ADICIONADO: Distribui uma lista de episódios sequencialmente para o lote de mídias
+func DistributeEpisodes(totalFiles int, inputEps []int) []int {
+	if len(inputEps) == 0 {
+		inputEps = []int{1}
+	}
+	result := make([]int, totalFiles)
+	startEp := inputEps[0]
+	for i := 0; i < totalFiles; i++ {
+		if i < len(inputEps) {
+			result[i] = inputEps[i]
+		} else {
+			result[i] = startEp + i
+		}
+	}
+	return result
 }
