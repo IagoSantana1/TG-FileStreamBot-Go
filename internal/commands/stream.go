@@ -14,7 +14,6 @@ import (
 	"github.com/celestix/gotgproto/storage"
 	"github.com/celestix/gotgproto/types"
 
-	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 )
 
@@ -67,141 +66,40 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	chatId := u.EffectiveChat().GetID()
 	peerChatId := ctx.PeerStorage.GetPeerById(chatId)
 
-	// Garante que o bot só responda em conversas privadas (Direct Messages)
-	// e nao responda no canal de log
+	// Responde apenas em conversas privadas
 	if peerChatId.Type != int(storage.TypeUser) {
 		return dispatcher.EndGroups
 	}
 
-	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
+	// Verifica se o usuário está autorizado
+	if len(config.ValueOf.AllowedUsers) != 0 &&
+		!utils.Contains(config.ValueOf.AllowedUsers, chatId) {
+
+		ctx.Reply(u,
+			ext.ReplyTextString("You are not allowed to use this bot."),
+			nil,
+		)
 		return dispatcher.EndGroups
 	}
+
+	// Verifica se é uma mídia suportada
 	supported, err := supportedMediaFilter(u.EffectiveMessage)
 	if err != nil {
 		return err
 	}
+
 	if !supported {
-		ctx.Reply(u, ext.ReplyTextString("Desculpe, este tipo de mensagem não é suportado."), nil)
+		ctx.Reply(u,
+			ext.ReplyTextString("Desculpe, este tipo de mensagem não é suportado."),
+			nil,
+		)
 		return dispatcher.EndGroups
 	}
 
-	// 🚀 CORREÇÃO AQUI: A mídia e a legenda foram envelopadas na estrutura []utils.MediaCopyItem
-	update, err := utils.SendMediaCopy(ctx, chatId, []utils.MediaCopyItem{
-		{
-			Media:   u.EffectiveMessage.Media,
-			Caption: u.EffectiveMessage.Message.Message,
-		},
-	})
+	// Adiciona a mídia ao lote
+	enqueueBatch(ctx, u, chatId)
 
-	if err != nil {
-		utils.Logger.Sugar().Error(err)
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
-		return dispatcher.EndGroups
-	}
-	if len(update.Updates) < 2 {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected update structure from Telegram"), nil)
-		return dispatcher.EndGroups
-	}
-	msgIDUpdate, ok := update.Updates[0].(*tg.UpdateMessageID)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected update type"), nil)
-		return dispatcher.EndGroups
-	}
-	messageID := msgIDUpdate.ID
-	newMsg, ok := update.Updates[1].(*tg.UpdateNewChannelMessage)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected channel message update"), nil)
-		return dispatcher.EndGroups
-	}
-	msg, ok := newMsg.Message.(*tg.Message)
-	if !ok {
-		ctx.Reply(u, ext.ReplyTextString("Error - unexpected message type"), nil)
-		return dispatcher.EndGroups
-	}
-	doc := msg.Media
-	file, err := utils.FileFromMedia(doc, msg.Message)
-	if err != nil {
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
-		return dispatcher.EndGroups
-	}
-	fullHash := utils.PackFile(
-		file.FileName,
-		file.FileSize,
-		file.MimeType,
-		file.ID,
-	)
-
-	metadata := utils.DetectFileMetadata(file.FileName, msg.Message)
-
-	// Formata o nome e aplica o Fallback de segurança se ficar vazio
-	displayName := utils.FormatFileNameForDisplay(metadata)
-	if displayName == "" {
-		displayName = file.FileName
-	}
-
-	hash := utils.GetShortHash(fullHash)
-	strmFileName := utils.ProcessStrmFileName(displayName)
-	strmFileNameWithExt := strmFileName + ".strm"
-	linkStrm := buildStrmLink(messageID, hash, strmFileNameWithExt)
-	link := fmt.Sprintf("%s/stream/%d?hash=%s", config.ValueOf.Host, messageID, hash)
-
-	// mensagem formatada da resposta do bot, com o link para download e stream do arquivo
-	messageFormatted := []styling.StyledTextOption{
-		styling.Bold("🎬 Mídia Pronta para Acesso"),
-		styling.Plain("\n➖➖➖➖➖➖➖➖➖➖➖\n"),
-		styling.Bold("📁 Arquivo: "),
-		styling.Code(file.FileName), // 🚀 CORREÇÃO AQUI: Exibe o displayName em vez do nome bruto
-		styling.Plain("\n\n"),
-		styling.Bold("Nome do strm: "),
-		styling.Code(strmFileNameWithExt),
-		styling.Plain("\n\n➖➖➖➖➖➖➖➖➖➖➖\n"),
-		styling.Bold("🔗 Links Rápidos (Toque para copiar):\n\n"),
-		styling.Bold("📺 Stream: "),
-		styling.Code(link),
-		styling.Plain("\n\n"),
-		styling.Bold("⬇️ Download: "),
-		styling.Code(link + "&d=true"),
-	}
-
-	text := styling.Code(link)
-	row := tg.KeyboardButtonRow{
-		Buttons: []tg.KeyboardButtonClass{
-			&tg.KeyboardButtonURL{
-				Text: "Download",
-				URL:  link + "&d=true",
-			},
-			&tg.KeyboardButtonURL{
-				Text: "strm",
-				URL:  linkStrm,
-			},
-		},
-	}
-
-	if strings.Contains(file.MimeType, "video") || strings.Contains(file.MimeType, "audio") || strings.Contains(file.MimeType, "pdf") {
-		row.Buttons = append(row.Buttons, &tg.KeyboardButtonURL{
-			Text: "Stream",
-			URL:  link,
-		})
-	}
-	markup := &tg.ReplyInlineMarkup{
-		Rows: []tg.KeyboardButtonRow{row},
-	}
-	if strings.Contains(link, "http://localhost") {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledText(text), &ext.ReplyOpts{
-			NoWebpage:        false,
-			ReplyToMessageId: u.EffectiveMessage.ID,
-		})
-	} else {
-		_, err = ctx.Reply(u, ext.ReplyTextStyledTextArray(messageFormatted), &ext.ReplyOpts{
-			Markup:           markup,
-			NoWebpage:        false,
-			ReplyToMessageId: u.EffectiveMessage.ID,
-		})
-	}
-	if err != nil {
-		utils.Logger.Sugar().Error(err)
-		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error - %s", err.Error())), nil)
-	}
+	// Não processa agora.
+	// O processamento acontecerá quando o lote for fechado.
 	return dispatcher.EndGroups
 }
