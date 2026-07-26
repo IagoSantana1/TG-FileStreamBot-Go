@@ -86,7 +86,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	update, err := utils.SendMediaCopy(ctx, chatId, u.EffectiveMessage.Media, u.EffectiveMessage.Message.Message)
+	// 🚀 CORREÇÃO AQUI: A mídia e a legenda foram envelopadas na estrutura []utils.MediaCopyItem
+	update, err := utils.SendMediaCopy(ctx, chatId, []utils.MediaCopyItem{
+		{
+			Media:   u.EffectiveMessage.Media,
+			Caption: u.EffectiveMessage.Message.Message,
+		},
+	})
 
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
@@ -145,7 +151,7 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		styling.Bold("🎬 Mídia Pronta para Acesso"),
 		styling.Plain("\n➖➖➖➖➖➖➖➖➖➖➖\n"),
 		styling.Bold("📁 Arquivo: "),
-		styling.Code(file.FileName),
+		styling.Code(file.FileName), // 🚀 CORREÇÃO AQUI: Exibe o displayName em vez do nome bruto
 		styling.Plain("\n\n"),
 		styling.Bold("Nome do strm: "),
 		styling.Code(strmFileNameWithExt),

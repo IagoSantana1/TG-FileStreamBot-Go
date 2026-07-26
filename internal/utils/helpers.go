@@ -27,6 +27,12 @@ func Contains[T comparable](s []T, e T) bool {
 	return false
 }
 
+// MediaCopyItem representa uma mídia individual acompanhada de sua legenda/caption
+type MediaCopyItem struct {
+	Media   tg.MessageMediaClass
+	Caption string
+}
+
 // IsClientDisconnectError checks if the error is due to client disconnecting
 // e.g. user seeking in video, stopping playback, or network issues on client side
 func IsClientDisconnectError(err error) bool {
@@ -200,58 +206,90 @@ func GetLogChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage
 	return channel.AsInput(), nil
 }
 
-// SendMediaCopy envia uma cópia da mídia para o canal de logs sem criar vínculo de encaminhamento.
-// O Telegram gera uma nova mensagem independente, de propriedade exclusiva do bot.
-func SendMediaCopy(ctx *ext.Context, toChatID int64, media tg.MessageMediaClass, caption string) (*tg.Updates, error) {
+// SendMediaCopy envia cópias de mídias para o canal de logs sem criar vínculo de encaminhamento.
+// Suporta envio individual ou em lote (Álbum nativo) para evitar FLOOD_WAIT.
+func SendMediaCopy(ctx *ext.Context, toChatID int64, items []MediaCopyItem) (*tg.Updates, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("nenhuma mídia fornecida para cópia")
+	}
+
 	// 1. Encontra o peer do canal de logs de destino
 	toPeer, err := GetLogChannelPeer(ctx, ctx.Raw, ctx.PeerStorage)
 	if err != nil {
 		return nil, err
 	}
 
-	var inputMedia tg.InputMediaClass
+	inputPeer := &tg.InputPeerChannel{
+		ChannelID:  toPeer.ChannelID,
+		AccessHash: toPeer.AccessHash,
+	}
 
-	// 2. Identifica o tipo de mídia (Documento ou Foto) e extrai o ID e o AccessHash
-	switch m := media.(type) {
-	case *tg.MessageMediaDocument:
-		if doc, ok := m.Document.(*tg.Document); ok {
-			inputMedia = &tg.InputMediaDocument{
-				ID: &tg.InputDocument{
-					ID:            doc.ID,
-					AccessHash:    doc.AccessHash,
-					FileReference: doc.FileReference,
-				},
+	// 2. Prepara a lista de InputSingleMedia para a API do Telegram
+	var multiMedia []tg.InputSingleMedia
+
+	for _, item := range items {
+		var inputMedia tg.InputMediaClass
+
+		switch m := item.Media.(type) {
+		case *tg.MessageMediaDocument:
+			if doc, ok := m.Document.(*tg.Document); ok {
+				inputMedia = &tg.InputMediaDocument{
+					ID: &tg.InputDocument{
+						ID:            doc.ID,
+						AccessHash:    doc.AccessHash,
+						FileReference: doc.FileReference,
+					},
+				}
+			}
+		case *tg.MessageMediaPhoto:
+			if photo, ok := m.Photo.(*tg.Photo); ok {
+				inputMedia = &tg.InputMediaPhoto{
+					ID: &tg.InputPhoto{
+						ID:            photo.ID,
+						AccessHash:    photo.AccessHash,
+						FileReference: photo.FileReference,
+					},
+				}
 			}
 		}
-	case *tg.MessageMediaPhoto:
-		if photo, ok := m.Photo.(*tg.Photo); ok {
-			inputMedia = &tg.InputMediaPhoto{
-				ID: &tg.InputPhoto{
-					ID:            photo.ID,
-					AccessHash:    photo.AccessHash,
-					FileReference: photo.FileReference,
-				},
-			}
+
+		if inputMedia != nil {
+			multiMedia = append(multiMedia, tg.InputSingleMedia{
+				RandomID: rand.Int63(),
+				Media:    inputMedia,
+				Message:  item.Caption,
+			})
 		}
 	}
 
-	// Se não for um tipo suportado, evita enviar uma requisição vazia
-	if inputMedia == nil {
-		return nil, fmt.Errorf("tipo de mídia não suportado para cópia direta")
+	if len(multiMedia) == 0 {
+		return nil, fmt.Errorf("nenhum tipo de mídia suportado para cópia direta")
 	}
 
-	// 3. Envia como uma NOVA mensagem usando as credenciais coletadas
-	updatesClass, err := ctx.Raw.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		RandomID: rand.Int63(),
-		Peer:     &tg.InputPeerChannel{ChannelID: toPeer.ChannelID, AccessHash: toPeer.AccessHash},
-		Media:    inputMedia,
-		Message:  caption,
-	})
+	var updatesClass tg.UpdatesClass
+
+	// 3. Decisão de Envio: Único ou Álbum (MultiMedia)
+	if len(multiMedia) == 1 {
+		// Envio individual simples
+		updatesClass, err = ctx.Raw.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			RandomID: multiMedia[0].RandomID,
+			Peer:     inputPeer,
+			Media:    multiMedia[0].Media,
+			Message:  multiMedia[0].Message,
+		})
+	} else {
+		// Envio agrupado em lote (Álbum nativo no canal de log)
+		updatesClass, err = ctx.Raw.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+			Peer:       inputPeer,
+			MultiMedia: multiMedia,
+		})
+	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Converte a interface genérica retornada pelo Telegram para o tipo concreto *tg.Updates
+	// 4. Converte a interface genérica retornada pelo Telegram para *tg.Updates
 	updates, ok := updatesClass.(*tg.Updates)
 	if !ok {
 		return nil, fmt.Errorf("erro ao converter tipo de atualização do Telegram")
