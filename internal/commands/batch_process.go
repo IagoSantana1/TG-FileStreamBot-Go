@@ -2,47 +2,81 @@ package commands
 
 import (
 	"EverythingSuckz/fsb/internal/utils"
+
+	"github.com/celestix/gotgproto/ext"
+	"github.com/gotd/td/tg"
 )
 
-func processBatch(chatID int64, items []BatchItem) {
+func processBatch(
+	chatID int64,
+	items []BatchItem,
+	loadingCtx *ext.Context,
+	loadingMsgID int,
+) {
 
-    media := make([]utils.MediaCopyItem, 0, len(items))
+	if len(items) == 0 {
+		return
+	}
 
-    for _, item := range items {
+	media := make([]utils.MediaCopyItem, 0, len(items))
 
-        media = append(media, utils.MediaCopyItem{
-            Media: item.Update.EffectiveMessage.Media,
-            Caption: item.Update.EffectiveMessage.Message.Message,
-        })
+	for _, item := range items {
 
-    }
+		media = append(media, utils.MediaCopyItem{
+			Media:   item.Update.EffectiveMessage.Media,
+			Caption: item.Update.EffectiveMessage.Message.Message,
+		})
 
-    updates, err := utils.SendMediaCopy(
-        items[0].Ctx,
-        chatID,
-        media,
-    )
+	}
 
-    if err != nil {
-        return
-    }
+	updates, err := utils.SendMediaCopy(items[0].Ctx, chatID, media)
 
-    copied, err := utils.ParseMediaUpdates(updates)
-    if err != nil {
-        return
-    }
+	if err != nil {
+		utils.Logger.Sugar().Error(err)
+		return
+	}
 
-    if len(copied) != len(items) {
-        return
-    }
+	copied, err := utils.ParseMediaUpdates(updates)
+	if err != nil {
+		utils.Logger.Sugar().Error(err)
+		return
+	}
 
-    for i := range items {
+	if len(copied) != len(items) {
+		utils.Logger.Sugar().Errorf(
+			"Quantidade de mídias retornadas (%d) diferente da enviada (%d)",
+			len(copied),
+			len(items),
+		)
+		return
+	}
 
-        processCopiedMedia(
-            items[i],
-            copied[i],
-        )
+	// Remove a mensagem "Agrupando arquivos..."
+	if loadingCtx != nil && loadingMsgID != 0 {
 
-    }
+		_, err := loadingCtx.Raw.MessagesDeleteMessages(
+			loadingCtx,
+			&tg.MessagesDeleteMessagesRequest{
+				ID:     []int{loadingMsgID},
+				Revoke: true,
+			},
+		)
 
+		if err != nil {
+			utils.Logger.Sugar().Error(err)
+		}
+	}
+
+	// Responde o usuário
+	for i := range items {
+
+		if err := processCopiedMedia(
+			items[i],
+			copied[i],
+		); err != nil {
+
+			utils.Logger.Sugar().Error(err)
+
+		}
+	}
 }
