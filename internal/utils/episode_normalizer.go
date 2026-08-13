@@ -24,6 +24,14 @@ func normalizeEpisodeFormat(fileName string) string {
 		clean = rePtSeasonEpisodeCapture.ReplaceAllString(clean, " "+seStr+" ")
 	}
 
+	// 1.5 Converte ordinais "2nd Season 11" -> "S02E11"
+	if matches := reOrdinalSeasonCapture.FindStringSubmatch(clean); len(matches) >= 3 {
+		season, _ := strconv.Atoi(matches[1])
+		episode, _ := strconv.Atoi(matches[2])
+		seStr := fmt.Sprintf("S%02dE%02d", season, episode)
+		clean = reOrdinalSeasonCapture.ReplaceAllString(clean, " "+seStr+" ")
+	}
+
 	// 2. Converte 1x08 ou T01E08 -> S01E08
 	clean = reUnifiedEpisode.ReplaceAllStringFunc(clean, func(match string) string {
 		parts := reUnifiedEpisode.FindStringSubmatch(match)

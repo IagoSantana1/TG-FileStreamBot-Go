@@ -15,10 +15,17 @@ func ProcessStrmFileNameWithQuality(fileName string, fileSize int64) string {
 		return fileName
 	}
 
-	// 1. Troca sublinhados por espaços e limpa quebras/extensões
+	// 0. Remove símbolos Unicode (como ●) e emojis antes de qualquer coisa
+	fileName = cleanNameForDownload(fileName)
+
+	// 🚀 NOVO: Remove domínios (como .eu, .com) e nomes de sites de pirataria
+	fileName = reDomains.ReplaceAllString(fileName, "")
+	fileName = reSiteNames.ReplaceAllString(fileName, "")
+
+	// 1. Troca sublinhados E quebras de linha por espaços e limpa extensões do final
 	fileName = strings.ReplaceAll(fileName, "_", " ")
-	lines := strings.Split(fileName, "\n")
-	fileName = strings.TrimSpace(lines[0])
+	fileName = strings.ReplaceAll(fileName, "\n", " ")
+	fileName = strings.TrimSpace(fileName)
 	fileName = reSiga.ReplaceAllString(fileName, "")
 	fileName = reAtMention.ReplaceAllString(fileName, "")
 	fileName = reExtension.ReplaceAllString(fileName, "")
@@ -26,10 +33,15 @@ func ProcessStrmFileNameWithQuality(fileName string, fileSize int64) string {
 	// 2. Normaliza qualquer padrão de temporada/episódio para SXXEXX
 	fileName = NormalizeEpisodeFormat(fileName)
 
-	// 3. SE FOR SÉRATION (contém SXXEXX): limpa o título e junta puramente com o SXXEXX
+	// 3. SE FOR SÉRIE (contém SXXEXX): limpa o título e junta puramente com o SXXEXX
 	if matches := reSeasonEpisodePattern.FindStringIndex(fileName); len(matches) == 2 {
 		rawTitle := fileName[:matches[0]]
-		seasonEpisode := strings.ToUpper(fileName[matches[0]:matches[1]])
+
+		// Pega o bloco exato onde a temporada e episódio foram encontrados (ex: "S01.E01")
+		rawSE := fileName[matches[0]:matches[1]]
+
+		// Remove pontos, traços ou espaços residuais para forçar o formato "S01E01"
+		seasonEpisode := regexp.MustCompile(`[._\s]`).ReplaceAllString(strings.ToUpper(rawSE), "")
 
 		// Limpa lixo do título (DSNP, C76, 1, H.264, Final, etc.)
 		cleanTitle := reJunkTags.ReplaceAllString(rawTitle, "")
@@ -256,12 +268,24 @@ func IsGenericFileName(fileName string) bool {
 		"bludv",
 		"mega.*filmes",
 		"series.*online",
+		"CajaréTorrents",
+		"[CajaréTorrents]",
+		"cajarétorrents",
 	}
 
 	for _, pattern := range sitePatterns {
-		matched, _ := regexp.MatchString("(?i)"+pattern, baseName)
-		if matched {
-			return true
+		if matched, _ := regexp.MatchString("(?i)"+pattern, baseName); matched {
+			// 1. Remove o padrão do site para ver o que sobra do nome do arquivo
+			cleaned := regexp.MustCompile("(?i)"+pattern).ReplaceAllString(baseName, "")
+
+			// 2. Remove também caracteres de pontuação e espaços extras
+			cleaned = regexp.MustCompile(`[_\.\-\s]+`).ReplaceAllString(cleaned, "")
+
+			// 3. Se após remover o nome do site não sobrar um título válido (menos de 3 letras),
+			// aí sim podemos considerar que é um arquivo de nome genérico/inválido.
+			if len(cleaned) < 3 {
+				return true
+			}
 		}
 	}
 
