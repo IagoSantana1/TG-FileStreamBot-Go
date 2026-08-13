@@ -29,14 +29,8 @@ func processBatch(
 
 	}
 
-	updates, err := utils.SendMediaCopy(items[0].Ctx, chatID, media)
+	copied, err := utils.SendMediaCopy(items[0].Ctx, chatID, media)
 
-	if err != nil {
-		utils.Logger.Sugar().Error(err)
-		return
-	}
-
-	copied, err := utils.ParseMediaUpdates(updates)
 	if err != nil {
 		utils.Logger.Sugar().Error(err)
 		return

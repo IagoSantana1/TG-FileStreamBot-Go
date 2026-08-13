@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/ext"
 	"github.com/celestix/gotgproto/storage"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
 )
 
@@ -206,9 +208,24 @@ func GetLogChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage
 	return channel.AsInput(), nil
 }
 
+// telegramAlbumLimit é o número máximo de itens que o Telegram aceita em um
+// único álbum (messages.sendMultiMedia). Enviar mais que isso em uma única
+// chamada faz a API rejeitar o lote inteiro.
+const telegramAlbumLimit = 10
+
+// interChunkDelay é uma pequena pausa entre o envio de blocos consecutivos
+// de um mesmo lote, para reduzir a chance de FLOOD_WAIT em lotes grandes.
+const interChunkDelay = 700 * time.Millisecond
+
+// maxFloodWaitRetries é o número máximo de vezes que tentamos reenviar um
+// bloco após um erro FLOOD_WAIT antes de desistir.
+const maxFloodWaitRetries = 3
+
 // SendMediaCopy envia cópias de mídias para o canal de logs sem criar vínculo de encaminhamento.
 // Suporta envio individual ou em lote (Álbum nativo) para evitar FLOOD_WAIT.
-func SendMediaCopy(ctx *ext.Context, toChatID int64, items []MediaCopyItem) (*tg.Updates, error) {
+// Lotes com mais de 10 itens (limite do Telegram para álbuns) são divididos
+// automaticamente em múltiplas chamadas sequenciais.
+func SendMediaCopy(ctx *ext.Context, toChatID int64, items []MediaCopyItem) ([]CopiedMedia, error) {
 	if len(items) == 0 {
 		return nil, fmt.Errorf("nenhuma mídia fornecida para cópia")
 	}
@@ -224,78 +241,130 @@ func SendMediaCopy(ctx *ext.Context, toChatID int64, items []MediaCopyItem) (*tg
 		AccessHash: toPeer.AccessHash,
 	}
 
-	// 2. Prepara a lista de InputSingleMedia para a API do Telegram
-	var multiMedia []tg.InputSingleMedia
+	var allCopied []CopiedMedia
 
-	for _, item := range items {
-		var inputMedia tg.InputMediaClass
+	// Divide os itens em blocos de no máximo telegramAlbumLimit, já que o
+	// Telegram rejeita álbuns maiores que isso.
+	for start := 0; start < len(items); start += telegramAlbumLimit {
+		end := start + telegramAlbumLimit
+		if end > len(items) {
+			end = len(items)
+		}
+		chunk := items[start:end]
 
-		switch m := item.Media.(type) {
-		case *tg.MessageMediaDocument:
-			if doc, ok := m.Document.(*tg.Document); ok {
-				inputMedia = &tg.InputMediaDocument{
-					ID: &tg.InputDocument{
-						ID:            doc.ID,
-						AccessHash:    doc.AccessHash,
-						FileReference: doc.FileReference,
-					},
+		// 2. Prepara a lista de InputSingleMedia deste bloco
+		var multiMedia []tg.InputSingleMedia
+
+		for _, item := range chunk {
+			var inputMedia tg.InputMediaClass
+
+			switch m := item.Media.(type) {
+			case *tg.MessageMediaDocument:
+				if doc, ok := m.Document.(*tg.Document); ok {
+					inputMedia = &tg.InputMediaDocument{
+						ID: &tg.InputDocument{
+							ID:            doc.ID,
+							AccessHash:    doc.AccessHash,
+							FileReference: doc.FileReference,
+						},
+					}
+				}
+			case *tg.MessageMediaPhoto:
+				if photo, ok := m.Photo.(*tg.Photo); ok {
+					inputMedia = &tg.InputMediaPhoto{
+						ID: &tg.InputPhoto{
+							ID:            photo.ID,
+							AccessHash:    photo.AccessHash,
+							FileReference: photo.FileReference,
+						},
+					}
 				}
 			}
-		case *tg.MessageMediaPhoto:
-			if photo, ok := m.Photo.(*tg.Photo); ok {
-				inputMedia = &tg.InputMediaPhoto{
-					ID: &tg.InputPhoto{
-						ID:            photo.ID,
-						AccessHash:    photo.AccessHash,
-						FileReference: photo.FileReference,
-					},
-				}
+
+			if inputMedia != nil {
+				multiMedia = append(multiMedia, tg.InputSingleMedia{
+					RandomID: rand.Int63(),
+					Media:    inputMedia,
+					Message:  item.Caption,
+				})
 			}
 		}
 
-		if inputMedia != nil {
-			multiMedia = append(multiMedia, tg.InputSingleMedia{
-				RandomID: rand.Int63(),
-				Media:    inputMedia,
-				Message:  item.Caption,
-			})
+		if len(multiMedia) == 0 {
+			continue
+		}
+
+		// 3. Envia o bloco, com retry em caso de FLOOD_WAIT
+		var updatesClass tg.UpdatesClass
+		var sendErr error
+
+		for attempt := 0; attempt <= maxFloodWaitRetries; attempt++ {
+
+			if len(multiMedia) == 1 {
+				// Envio individual simples
+				updatesClass, sendErr = ctx.Raw.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+					RandomID: multiMedia[0].RandomID,
+					Peer:     inputPeer,
+					Media:    multiMedia[0].Media,
+					Message:  multiMedia[0].Message,
+				})
+			} else {
+				// Envio agrupado em lote (Álbum nativo no canal de log)
+				updatesClass, sendErr = ctx.Raw.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+					Peer:       inputPeer,
+					MultiMedia: multiMedia,
+				})
+			}
+
+			if sendErr == nil {
+				break
+			}
+
+			waited, floodErr := tgerr.FloodWait(ctx, sendErr)
+			if waited {
+				// Já esperou o tempo pedido pelo Telegram, tenta de novo
+				continue
+			}
+			if floodErr != nil && floodErr != sendErr {
+				// Contexto cancelado enquanto esperava o FLOOD_WAIT
+				return allCopied, floodErr
+			}
+			// Erro que não é FLOOD_WAIT: não adianta insistir
+			break
+		}
+
+		if sendErr != nil {
+			return allCopied, fmt.Errorf(
+				"erro ao enviar bloco de mídias (itens %d-%d de %d): %w",
+				start+1, end, len(items), sendErr,
+			)
+		}
+
+		// 4. Converte a interface genérica retornada pelo Telegram para *tg.Updates
+		updates, ok := updatesClass.(*tg.Updates)
+		if !ok {
+			return allCopied, fmt.Errorf("erro ao converter tipo de atualização do Telegram")
+		}
+
+		chunkCopied, err := ParseMediaUpdates(updates)
+		if err != nil {
+			return allCopied, err
+		}
+
+		allCopied = append(allCopied, chunkCopied...)
+
+		// Pequena pausa entre blocos para não estourar limites de flood
+		// ao enviar lotes grandes (ex: 25 arquivos = 3 blocos).
+		if end < len(items) {
+			time.Sleep(interChunkDelay)
 		}
 	}
 
-	if len(multiMedia) == 0 {
+	if len(allCopied) == 0 {
 		return nil, fmt.Errorf("nenhum tipo de mídia suportado para cópia direta")
 	}
 
-	var updatesClass tg.UpdatesClass
-
-	// 3. Decisão de Envio: Único ou Álbum (MultiMedia)
-	if len(multiMedia) == 1 {
-		// Envio individual simples
-		updatesClass, err = ctx.Raw.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-			RandomID: multiMedia[0].RandomID,
-			Peer:     inputPeer,
-			Media:    multiMedia[0].Media,
-			Message:  multiMedia[0].Message,
-		})
-	} else {
-		// Envio agrupado em lote (Álbum nativo no canal de log)
-		updatesClass, err = ctx.Raw.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
-			Peer:       inputPeer,
-			MultiMedia: multiMedia,
-		})
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Converte a interface genérica retornada pelo Telegram para *tg.Updates
-	updates, ok := updatesClass.(*tg.Updates)
-	if !ok {
-		return nil, fmt.Errorf("erro ao converter tipo de atualização do Telegram")
-	}
-
-	return updates, nil
+	return allCopied, nil
 }
 
 // isAllLettersOrNumbers verifica se uma string contém apenas letras e números
