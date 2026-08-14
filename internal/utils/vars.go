@@ -8,7 +8,7 @@ var (
 	rePtSeasonPattern        = regexp.MustCompile(`(?i)\b(?:(?:temporada|season)[\s._-]*\d{1,2}|\d{1,2}(?:st|nd|rd|th)[\s._-]*season)(?:[\s._-]*(?:epis[óo]dio|episode|ep)?[\s._-]*)\d{1,3}\b`)
 
 	// 🚀 Tags de plataformas, codecs, resoluções e palavras de desfecho para remoção
-	reJunkTags = regexp.MustCompile(`(?i)\b(DSNP|NF|AMZN|HMAX|ATVP|DSNY|PCOK|iT|CWA|C76|WEB-?DL|WEBRip|WEB|DL|BluRay|BRRip|HDRip|H\.?264|H\.?265|x264|x265|HEVC|AVC|AAC\d*|AC3|DDP?\d*[\._\s]?\d*|Atmos|TrueHD|DTS|2160p|1080p|720p|480p|4k|2k|Final|Completo|Dublado|DUB|DUAL|Legendado|Multi|MP4|MKV|AVI|Anitsu|Erai[-_\s]?raws)\b`)
+	reJunkTags = regexp.MustCompile(`(?i)\b(EA|CR|BD|DSNP|NF|AMZN|HMAX|ATVP|DSNY|PCOK|iT|CWA|C76|WEB-?DL|WEBRip|WEB|DL|BluRay|BRRip|HDRip|H\.?264|H\.?265|x264|x265|HEVC|AVC|AAC\d*|AC3|DDP?\d*[\._\s]?\d*|Atmos|TrueHD|DTS|2160p|1080p|720p|480p|4k|2k|Final|Completo|Dublado|DUB|DUAL|Legendado|Multi|MP4|MKV|AVI|Anitsu|Erai[-_\s]?raws)\b`)
 
 	// Seus padrões preexistentes mantidos abaixo:
 	reUnifiedEpisode       = regexp.MustCompile(`(?i)\b(?:(\d{1,2})[xX](\d{1,2})|[ST](\d{1,2})[._\s]?E(\d{1,2}))\b`)
@@ -22,7 +22,7 @@ var (
 	reExtension            = regexp.MustCompile(`(?i)\.(mp4|mkv|avi|strm)$`)
 	reYearWrapped          = regexp.MustCompile(`\(\d{4}\)|\[\d{4}\]`)
 	reYearPlain            = regexp.MustCompile(`\b\d{4}\b`)
-	reResolution           = regexp.MustCompile(`(?i)\b\d{3,4}p\b`)
+	reResolution           = regexp.MustCompile(`(?i)\b(\d{3,4}p|\d{3,4}x\d{3,4})\b`)
 	reParensBrackets       = regexp.MustCompile(`[\(\)\[\]]`)
 	reQualityCodecs        = regexp.MustCompile(`(?i)\b(web[-\s]?dl|webdl|web[-\s]?rip|webrip|blu[-\s]?ray|bluray|hd[-\s]?rip|hdrip|dvd[-\s]?rip|dvdrip|hdtv|brip|brrip|4k|uhd|x264|x265|h\.?264|h\.?265|hevc|avc|ddp?\d*\.?\d*|aac\d*\.?\d*|ac3|dts[-\s]?hd|dts|atmos|truehd)\b`)
 	reReleaseGroup         = regexp.MustCompile(`-[A-Za-z0-9]+`)
