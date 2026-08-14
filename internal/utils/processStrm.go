@@ -269,7 +269,6 @@ func IsGenericFileName(fileName string) bool {
 		"mega.*filmes",
 		"series.*online",
 		"CajaréTorrents",
-		"[CajaréTorrents]",
 		"cajarétorrents",
 	}
 
