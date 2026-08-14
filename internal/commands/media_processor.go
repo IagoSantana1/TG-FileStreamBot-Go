@@ -15,14 +15,14 @@ import (
 func processCopiedMedia(
 	original BatchItem,
 	copied utils.CopiedMedia,
-) error {
+) (*utils.BatchStrmEntry, string, error) {
 
 	file, err := utils.FileFromMedia(
 		copied.Message.Media,
 		copied.Message.Message,
 	)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 
 	fullHash := utils.PackFile(
@@ -133,8 +133,11 @@ func processCopiedMedia(
 			nil,
 		)
 
-		return err
+		return nil, "", err
 	}
 
-	return nil
+	return &utils.BatchStrmEntry{
+		FileName: strmFileNameWithExt,
+		Content:  link,
+	}, metadata.Title, nil
 }
