@@ -35,7 +35,13 @@ func DetectFileMetadata(fileName, messageDescription string) *FileMetadata {
 
 	metadata.ExpandedName = combineNameAndDescription(fileName, messageDescription)
 	metadata.Title = extractTitle(fileName, messageDescription)
+
+	// 🚀 CORREÇÃO: Busca a resolução na descrição; se não achar, busca no nome do arquivo
 	metadata.Quality = ExtractQualityFromDescription(messageDescription)
+	if metadata.Quality == "" {
+		metadata.Quality = extractQualityInfo(fileName)
+	}
+
 	metadata.Type, metadata.TypeConfidence = detectFileType(metadata.ExpandedName)
 
 	if metadata.Type == "series" {
@@ -123,19 +129,11 @@ func detectFileType(expandedName string) (string, int) {
 	return "unknown", 0
 }
 
-// 🚀 FIX: Agora extrai corretamente Temporada e Episódio de formatos em português
+// extractSeasonEpisode extrai corretamente Temporada e Episódio ignorando anos como 2026
 func extractSeasonEpisode(expandedName string) (season int, episode int, hasInfo bool) {
 	clean := strings.ReplaceAll(expandedName, "_", " ")
 
-	// 1. Tenta extrair de "Temporada 01 episódio 08"
-	if matches := rePtSeasonEpisodeCapture.FindStringSubmatch(clean); len(matches) >= 3 {
-		season, _ = strconv.Atoi(matches[1])
-		episode, _ = strconv.Atoi(matches[2])
-		hasInfo = true
-		return
-	}
-
-	// 2. Tenta extrair de S01E08 ou 1x08
+	// 1. PRIORIDADE ABSOLUTA: Tenta extrair primeiro de padrões explícitos como S04E01 ou 4x01
 	if matches := reUnifiedEpisode.FindStringSubmatch(clean); len(matches) == 5 {
 		if matches[1] != "" {
 			season, _ = strconv.Atoi(matches[1])
@@ -151,6 +149,15 @@ func extractSeasonEpisode(expandedName string) (season int, episode int, hasInfo
 		}
 	}
 
+	// 2. Tenta extrair de formatos por extenso em português "Temporada 01 episódio 08"
+	if matches := rePtSeasonEpisodeCapture.FindStringSubmatch(clean); len(matches) >= 3 {
+		season, _ = strconv.Atoi(matches[1])
+		episode, _ = strconv.Atoi(matches[2])
+		hasInfo = true
+		return
+	}
+
+	// 3. Caso não ache o par completo, busca isoladamente
 	if seasonNum, found := ExtractSeasonNumber(clean); found && seasonNum > 0 {
 		season = seasonNum
 	}
@@ -281,16 +288,19 @@ func FormatFileNameForDisplay(metadata *FileMetadata) string {
 	title = strings.TrimSpace(title)
 
 	if metadata.Type == "series" && metadata.Season > 0 && metadata.Episode > 0 {
-		return fmt.Sprintf("%s - S%02dE%02d", title, metadata.Season, metadata.Episode)
+		if metadata.Quality != "" {
+			return fmt.Sprintf("%s S%02dE%02d - %s", title, metadata.Season, metadata.Episode, metadata.Quality)
+		}
+		return fmt.Sprintf("%s S%02dE%02d", title, metadata.Season, metadata.Episode)
 	}
 
 	if metadata.Type == "series" && metadata.Season > 0 {
-		return fmt.Sprintf("%s - S%02d", title, metadata.Season)
+		return fmt.Sprintf("%s S%02d", title, metadata.Season)
 	}
 
 	if metadata.Type == "movie" {
 		if metadata.Quality != "" {
-			return fmt.Sprintf("%s.%s", title, metadata.Quality)
+			return fmt.Sprintf("%s - %s", title, metadata.Quality)
 		}
 		return title
 	}
